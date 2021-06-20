@@ -1,0 +1,4 @@
+# zbar
+pyzbar
+pdf2image
+opencv-python
