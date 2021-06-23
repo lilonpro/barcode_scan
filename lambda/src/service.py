@@ -106,6 +106,6 @@ def split_pdf(epod_bytes, pdf_info, bucket):
         })
     return splited_pdfs
 if __name__ == "__main__":
-    pdf_info = extract_pages("email-classification-ui", "SO_BOL.pdf")
+    pdf_info = extract_pages("email-classification-ui", "two_epod.pdf")
     validate_pdf_info(pdf_info)
     print(pdf_info)
