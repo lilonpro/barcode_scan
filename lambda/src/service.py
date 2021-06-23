@@ -10,7 +10,9 @@ from pdf2image.exceptions import (
     PDFPageCountError,
     PDFSyntaxError
 )
+import io
 import logging
+from PyPDF2 import PdfFileWriter, PdfFileReader
 
 def extract_pages(bucket, key):
     # Get pdf file from S3
@@ -22,11 +24,12 @@ def extract_pages(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
 
     # convert each page of PDF to image and scan for barcode, image will be saved in temp folder
+    epod_bytes = obj["Body"].read()
     with tempfile.TemporaryDirectory() as path:
         file_prefix = "epod-"
         # next comment line is to test scan local pdf file
         # images_from_path = convert_from_path('SO_BOL.pdf', output_folder=path, fmt="png", output_file=file_prefix)
-        images_from_path = convert_from_bytes(obj["Body"].read(), output_folder=path, fmt="png", output_file=file_prefix)
+        images_from_path = convert_from_bytes(epod_bytes, output_folder=path, fmt="png", output_file=file_prefix)
         # list to hold info for each page of pdf
         pdf_info = []
         # scan barcode page by page
@@ -45,6 +48,15 @@ def extract_pages(bucket, key):
                 "pod_page": int(barcode_info[2]),
                 "barcode": barcode
             })
+    validate_pdf_info(pdf_info)
+    logging.info("Splitting pdf by barcode")
+    splited_pdfs = split_pdf(epod_bytes, pdf_info, bucket)
+    logging.info("Uploading splitted pdfs")
+    for pdf in splited_pdfs:
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"splitted/{pdf['pod_type']}_{pdf['pod_number']}.pdf",
+            Body=io.BytesIO(pdf["pdf_bytes"]))
     return pdf_info
 
 def scan_barcode(image):
@@ -66,6 +78,33 @@ def validate_pdf_info(pdf_info):
         elif page["pod_page"] != 1 and page["pod_page"] != (pdf_info[index - 1]["pod_page"] + 1):
             raise ValueError(f'Missing page in between {pdf_info[index - 1]} and {page["pod_page"]} for pod {page["pod_number"]}')
 
+
+def split_pdf(epod_bytes, pdf_info, bucket):
+    logging.info(f"Spliting pdf epod file")
+    inputpdf = PdfFileReader(io.BytesIO(epod_bytes))
+    outputpdf = None
+    splited_pdfs = []
+    for index, page in enumerate(pdf_info):
+        if page["pod_page"] == 1:
+            if outputpdf is not None:
+                with io.BytesIO() as splited_pdf:
+                    outputpdf.write(splited_pdf)
+                    splited_pdfs.append({
+                        "pod_number": pdf_info[index - 1]["pod_number"],
+                        "pod_type": pdf_info[index - 1]["pod_type"],
+                        "pdf_bytes": splited_pdf.getvalue()
+                    })
+            outputpdf = PdfFileWriter()
+        else:
+            outputpdf.addPage(inputpdf.getPage(page["pdf_page"] - 1))
+    with io.BytesIO() as splited_pdf:
+        outputpdf.write(splited_pdf)
+        splited_pdfs.append({
+            "pod_number": pdf_info[index - 1]["pod_number"],
+            "pod_type": pdf_info[index - 1]["pod_type"],
+            "pdf_bytes": splited_pdf.getvalue()
+        })
+    return splited_pdfs
 if __name__ == "__main__":
     pdf_info = extract_pages("email-classification-ui", "SO_BOL.pdf")
     validate_pdf_info(pdf_info)
